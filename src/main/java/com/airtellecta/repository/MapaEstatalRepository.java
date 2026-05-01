@@ -19,7 +19,7 @@ public class MapaEstatalRepository {
         String filtroSexo = sexo.isPresent() ? " AND e.cve_sexo = :sexo" : "";
 
         @SuppressWarnings("unchecked")
-        List<Tuple> rows = em.createNativeQuery("""
+        var query = em.createNativeQuery("""
             SELECT
                 ce.cve_entidad,
                 ce.nombre,
@@ -39,8 +39,13 @@ public class MapaEstatalRepository {
             """ + filtroSexo + """
              GROUP BY ce.cve_entidad, ce.nombre, ce.abreviatura, p.pob_total
              ORDER BY prev_pct DESC
-            """, Tuple.class)
-            .getResultList();
+            """, Tuple.class);
+
+        if (sexo.isPresent()) {
+            query.setParameter("sexo", sexo.get());
+        }
+
+        List<Tuple> rows = query.getResultList();
 
         return rows.stream().map(row -> {
             EntidadPrevalenciaDto dto = new EntidadPrevalenciaDto();
