@@ -71,4 +71,30 @@ public class SimulacionRepository {
             .getSingleResult();
         return result != null ? (BigDecimal) result : BigDecimal.ZERO;
     }
+
+    public record ConstanteCompleta(BigDecimal valor, String fuente, String fuenteUrl, short anioReferencia) {}
+
+    public Map<String, ConstanteCompleta> obtenerConstantesCompletasActivas() {
+        @SuppressWarnings("unchecked")
+        List<Tuple> rows = em.createNativeQuery("""
+            SELECT clave, valor, fuente, fuente_url, anio_referencia
+            FROM constantes_simulador
+            WHERE activo = 1
+            """, Tuple.class)
+            .getResultList();
+
+        Map<String, ConstanteCompleta> mapa = new HashMap<>();
+        for (Tuple row : rows) {
+            mapa.put(
+                (String) row.get("clave"),
+                new ConstanteCompleta(
+                    (BigDecimal) row.get("valor"),
+                    (String) row.get("fuente"),
+                    (String) row.get("fuente_url"),
+                    ((Number) row.get("anio_referencia")).shortValue()
+                )
+            );
+        }
+        return mapa;
+    }
 }
