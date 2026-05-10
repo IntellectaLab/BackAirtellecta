@@ -20,11 +20,13 @@ import java.util.Map;
 public class SimulacionService {
 
     private static final BigDecimal CIEN = new BigDecimal("100");
-    private static final BigDecimal VEINTE = new BigDecimal("20");
     private static final BigDecimal MILLON = new BigDecimal("1000000");
 
     @Inject
     SimulacionRepository repository;
+
+    @Inject
+    ConstantesService constantesService;
 
     private record EfectoPrecio(BigDecimal prevalenciaFinal, ElasticidadesAplicadasDto dto) {}
 
@@ -34,7 +36,7 @@ public class SimulacionService {
         BigDecimal ahorroTotal) {}
 
     public SimulacionResultadoDto simular(SimulacionRequestDto request) {
-        Map<String, BigDecimal> constantes = cargarConstantes();
+        Map<String, BigDecimal> constantes = constantesService.cargarConstantes();
 
         List<String> clavesPoliticas = request.politicas != null
             ? request.politicas : List.of();
@@ -48,8 +50,8 @@ public class SimulacionService {
         BigDecimal poblacion = constantes.get("SIM_POBLACION_18_PLUS");
         BigDecimal fumadoresBase = poblacion.multiply(prevalenciaBase)
             .divide(CIEN, 0, RoundingMode.HALF_UP);
-        BigDecimal defuncionesAtrib = calcularDefuncionesAtribuibles(constantes);
-        BigDecimal impuestoActualPct = calcularImpuestoActualPct(constantes);
+        BigDecimal defuncionesAtrib = constantesService.calcularDefuncionesAtribuibles(constantes);
+        BigDecimal impuestoActualPct = constantesService.calcularImpuestoActualPct(constantes);
 
         List<PoliticaAplicadaDto> politicasAplicadas = cargarPoliticas(clavesPoliticas);
         BigDecimal prevalenciaPostPol = aplicarPoliticas(prevalenciaBase, politicasAplicadas);
@@ -68,38 +70,6 @@ public class SimulacionService {
             prevalenciaBase, prevalenciaFinal, poblacion, fumadoresBase,
             defuncionesAtrib, impuestoActualPct, horizonteAnios,
             proyeccion, politicasAplicadas, efectoPrecio.dto);
-    }
-
-    private Map<String, BigDecimal> cargarConstantes() {
-        Map<String, BigDecimal> constantes = repository.obtenerConstantesActivas();
-        if (constantes.isEmpty()) {
-            throw new IllegalStateException(
-                "Error de configuracion: constantes del simulador no disponibles");
-        }
-        return constantes;
-    }
-
-    private BigDecimal calcularDefuncionesAtribuibles(Map<String, BigDecimal> constantes) {
-        return constantes.get("SIM_DEFUNCIONES_TOTALES_ANUAL")
-            .multiply(constantes.get("SIM_FRACCION_MORTALIDAD_TABACO_PCT"))
-            .divide(CIEN, 0, RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal calcularImpuestoActualPct(Map<String, BigDecimal> constantes) {
-        BigDecimal precioCajetilla = constantes.get("SIM_PRECIO_CAJETILLA_BASE_MXN");
-        BigDecimal iepsAdvalorem = constantes.get("SIM_IEPS_ADVALOREM_PCT");
-        BigDecimal iepsEspPack = constantes.get("SIM_IEPS_ESPECIFICO_POR_CIGARRO")
-            .multiply(VEINTE);
-
-        BigDecimal precioFabricante = precioCajetilla.subtract(iepsEspPack)
-            .divide(BigDecimal.ONE.add(iepsAdvalorem.divide(CIEN, 6, RoundingMode.HALF_UP)),
-                4, RoundingMode.HALF_UP);
-        BigDecimal iepsAdvMonto = precioFabricante.multiply(iepsAdvalorem)
-            .divide(CIEN, 4, RoundingMode.HALF_UP);
-
-        return iepsEspPack.add(iepsAdvMonto)
-            .divide(precioCajetilla, 4, RoundingMode.HALF_UP)
-            .multiply(CIEN).setScale(2, RoundingMode.HALF_UP);
     }
 
     private List<PoliticaAplicadaDto> cargarPoliticas(List<String> claves) {
