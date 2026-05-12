@@ -3,6 +3,7 @@ package com.airtellecta.api;
 import com.airtellecta.dto.ApiResponse;
 import com.airtellecta.dto.response.EntidadPrevalenciaDto;
 import com.airtellecta.service.MapaEstatalService;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -13,6 +14,7 @@ import java.util.List;
 
 @Path("/api/mapa-estatal")
 @Produces(MediaType.APPLICATION_JSON)
+@RolesAllowed({"ADMIN", "USER"})
 public class MapaEstatalResource {
 
     @Inject

@@ -3,6 +3,7 @@ package com.airtellecta.api;
 import com.airtellecta.dto.ApiResponse;
 import com.airtellecta.dto.response.PanelEjecutivoDto;
 import com.airtellecta.service.PanelEjecutivoService;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -11,6 +12,7 @@ import jakarta.ws.rs.core.MediaType;
 
 @Path("/api/panel-ejecutivo")
 @Produces(MediaType.APPLICATION_JSON)
+@RolesAllowed({"ADMIN", "USER"})
 public class PanelEjecutivoResource {
 
     @Inject
