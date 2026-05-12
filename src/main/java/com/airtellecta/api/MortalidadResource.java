@@ -3,6 +3,7 @@ package com.airtellecta.api;
 import com.airtellecta.dto.ApiResponse;
 import com.airtellecta.dto.response.MortalidadDto;
 import com.airtellecta.service.MortalidadService;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -11,6 +12,7 @@ import jakarta.ws.rs.core.MediaType;
 
 @Path("/api/mortalidad")
 @Produces(MediaType.APPLICATION_JSON)
+@RolesAllowed({"ADMIN", "USER"})
 public class MortalidadResource {
 
     @Inject
