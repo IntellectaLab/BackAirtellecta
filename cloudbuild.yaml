@@ -1,0 +1,27 @@
+steps:
+  - name: 'maven:3.9.9-eclipse-temurin-21'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        chmod +x mvnw
+        ./mvnw package -DskipTests
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'src/main/docker/Dockerfile.jvm'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:latest'
+      - '.'
+
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:latest'
+
+substitutions:
+  _REGION: 'us-central1'
+  _REPOSITORY: 'airtellecta-back-repo'
+  _IMAGE: 'airtellecta-back'
+options:
+  logging: CLOUD_LOGGING_ONLY
