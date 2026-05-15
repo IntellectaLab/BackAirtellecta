@@ -23,3 +23,5 @@ substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'airtellecta-back-repo'
   _IMAGE: 'airtellecta-back'
+options:
+  logging: CLOUD_LOGGING_ONLY
