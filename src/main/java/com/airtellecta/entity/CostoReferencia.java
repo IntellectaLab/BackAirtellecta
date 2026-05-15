@@ -25,7 +25,7 @@ public class CostoReferencia extends PanacheEntityBase {
 
     public BigDecimal factorInflacion;
 
-    @Column(insertable = false, updatable = false)
+    @Column(name = "costo_ajustado_2025", insertable = false, updatable = false)
     public BigDecimal costoAjustado2025;
 
     public String fuente;

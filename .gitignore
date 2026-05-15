@@ -36,3 +36,5 @@ release.properties
 # Environment
 .env
 .env.local
+*-firebase-adminsdk-*.json
+airtellecta-1d1ca-firebase-adminsdk-fbsvc-6b25b5a298.json

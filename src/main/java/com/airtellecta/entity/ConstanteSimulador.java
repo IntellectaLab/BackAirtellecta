@@ -38,6 +38,7 @@ public class ConstanteSimulador extends PanacheEntityBase {
 
     public String fuenteUrl;
 
+    @Column(columnDefinition = "tinyint")
     public Boolean activo;
 
     @Column(name = "created_by")
