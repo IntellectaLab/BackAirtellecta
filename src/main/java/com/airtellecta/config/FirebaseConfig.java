@@ -30,17 +30,12 @@ public class FirebaseConfig {
     @ConfigProperty(name = "firebase.credentials.base64", defaultValue = "skip")
     String credentialsBase64;
 
-    void onStart(@Observes StartupEvent ev) {
-        // Initialization is handled lazily in produceFirebaseAuth to avoid
-        // a timing race where the CDI producer runs before StartupEvent fires.
-        LOG.info("FirebaseConfig startup observer called");
+    private boolean hasCredentialsPath() {
+        return credentialsPath.isPresent() && !credentialsPath.get().isBlank();
     }
 
-    private synchronized void initializeIfNeeded() {
-        if (!FirebaseApp.getApps().isEmpty()) {
-            return;
-        }
-        if (credentialsPath.isEmpty() && "skip".equals(credentialsBase64)) {
+    void onStart(@Observes StartupEvent ev) {
+        if (!hasCredentialsPath() && "skip".equals(credentialsBase64)) {
             LOG.warn("Firebase initialization skipped (test mode)");
             return;
         }
@@ -50,7 +45,11 @@ public class FirebaseConfig {
             FirebaseOptions options = FirebaseOptions.builder()
                     .setCredentials(credentials)
                     .build();
-            FirebaseApp.initializeApp(options);
+            try {
+                FirebaseApp.initializeApp(options);
+            } catch (IllegalStateException alreadyInitialized) {
+                LOG.info("FirebaseApp already initialized, reusing existing instance");
+            }
             LOG.info("Firebase Admin SDK initialized successfully");
         } catch (IOException | IllegalArgumentException e) {
             throw new RuntimeException("Failed to initialize Firebase Admin SDK", e);
@@ -58,7 +57,7 @@ public class FirebaseConfig {
     }
 
     private InputStream resolveCredentials() throws IOException {
-        if (credentialsPath.isPresent()) {
+        if (hasCredentialsPath()) {
             LOG.info("Loading Firebase credentials from file: " + credentialsPath.get());
             return new FileInputStream(credentialsPath.get());
         }
@@ -70,13 +69,6 @@ public class FirebaseConfig {
     @Produces
     @Singleton
     FirebaseAuth produceFirebaseAuth() {
-        initializeIfNeeded();
-        if (FirebaseApp.getApps().isEmpty()) {
-            throw new IllegalStateException(
-                "Firebase is not initialized. " +
-                "For local dev: set firebase.credentials.path to your service account JSON file. " +
-                "For production: set the FIREBASE_CREDENTIALS_BASE64 environment variable.");
-        }
         return FirebaseAuth.getInstance();
     }
 }
