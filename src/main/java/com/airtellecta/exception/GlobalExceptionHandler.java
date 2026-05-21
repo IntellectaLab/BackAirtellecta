@@ -3,6 +3,7 @@ package com.airtellecta.exception;
 import com.airtellecta.dto.ApiResponse;
 import io.quarkus.security.ForbiddenException;
 import io.quarkus.security.UnauthorizedException;
+import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 import org.jboss.resteasy.reactive.server.ServerExceptionMapper;
@@ -29,6 +30,13 @@ public class GlobalExceptionHandler {
     public Response handleForbidden(ForbiddenException e) {
         return Response.status(Response.Status.FORBIDDEN)
                 .entity(ApiResponse.fail("Insufficient permissions"))
+                .build();
+    }
+
+    @ServerExceptionMapper(WebApplicationException.class)
+    public Response handleWebException(WebApplicationException e) {
+        return Response.status(e.getResponse().getStatus())
+                .entity(ApiResponse.fail(e.getMessage()))
                 .build();
     }
 

@@ -31,6 +31,15 @@ public class FirebaseConfig {
     String credentialsBase64;
 
     void onStart(@Observes StartupEvent ev) {
+        // Initialization is handled lazily in produceFirebaseAuth to avoid
+        // a timing race where the CDI producer runs before StartupEvent fires.
+        LOG.info("FirebaseConfig startup observer called");
+    }
+
+    private synchronized void initializeIfNeeded() {
+        if (!FirebaseApp.getApps().isEmpty()) {
+            return;
+        }
         if (credentialsPath.isEmpty() && "skip".equals(credentialsBase64)) {
             LOG.warn("Firebase initialization skipped (test mode)");
             return;
@@ -41,11 +50,7 @@ public class FirebaseConfig {
             FirebaseOptions options = FirebaseOptions.builder()
                     .setCredentials(credentials)
                     .build();
-            try {
-                FirebaseApp.initializeApp(options);
-            } catch (IllegalStateException alreadyInitialized) {
-                LOG.info("FirebaseApp already initialized, reusing existing instance");
-            }
+            FirebaseApp.initializeApp(options);
             LOG.info("Firebase Admin SDK initialized successfully");
         } catch (IOException | IllegalArgumentException e) {
             throw new RuntimeException("Failed to initialize Firebase Admin SDK", e);
@@ -65,6 +70,13 @@ public class FirebaseConfig {
     @Produces
     @Singleton
     FirebaseAuth produceFirebaseAuth() {
+        initializeIfNeeded();
+        if (FirebaseApp.getApps().isEmpty()) {
+            throw new IllegalStateException(
+                "Firebase is not initialized. " +
+                "For local dev: set firebase.credentials.path to your service account JSON file. " +
+                "For production: set the FIREBASE_CREDENTIALS_BASE64 environment variable.");
+        }
         return FirebaseAuth.getInstance();
     }
 }
