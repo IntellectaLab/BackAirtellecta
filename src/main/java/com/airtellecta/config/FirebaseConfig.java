@@ -30,8 +30,12 @@ public class FirebaseConfig {
     @ConfigProperty(name = "firebase.credentials.base64", defaultValue = "skip")
     String credentialsBase64;
 
+    private boolean hasCredentialsPath() {
+        return credentialsPath.isPresent() && !credentialsPath.get().isBlank();
+    }
+
     void onStart(@Observes StartupEvent ev) {
-        if (credentialsPath.isEmpty() && "skip".equals(credentialsBase64)) {
+        if (!hasCredentialsPath() && "skip".equals(credentialsBase64)) {
             LOG.warn("Firebase initialization skipped (test mode)");
             return;
         }
@@ -53,7 +57,7 @@ public class FirebaseConfig {
     }
 
     private InputStream resolveCredentials() throws IOException {
-        if (credentialsPath.isPresent()) {
+        if (hasCredentialsPath()) {
             LOG.info("Loading Firebase credentials from file: " + credentialsPath.get());
             return new FileInputStream(credentialsPath.get());
         }
