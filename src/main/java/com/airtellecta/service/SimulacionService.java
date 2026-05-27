@@ -132,26 +132,35 @@ public class SimulacionService {
         return new EfectoPrecio(prevalenciaFinal, dto);
     }
 
+    private static final int ANIOS_CONVERGENCIA = 5;
+
     private ResultadoProyeccion proyectar(BigDecimal prevalenciaBase,
             BigDecimal prevalenciaFinal, BigDecimal poblacion,
             BigDecimal defuncionesAtrib, BigDecimal costoPromedio, int horizonteAnios) {
         List<ProyeccionAnualDto> serie = new ArrayList<>();
         BigDecimal defEvitadasAcum = BigDecimal.ZERO;
         BigDecimal ahorroAcum = BigDecimal.ZERO;
-
-        BigDecimal fumadoresT = poblacion.multiply(prevalenciaFinal)
-            .divide(CIEN, 0, RoundingMode.HALF_UP);
-        BigDecimal defEvitadasT = prevalenciaBase.subtract(prevalenciaFinal)
-            .divide(prevalenciaBase, 6, RoundingMode.HALF_UP)
-            .multiply(defuncionesAtrib)
-            .setScale(0, RoundingMode.HALF_UP);
-        BigDecimal ahorroT = defEvitadasT.multiply(costoPromedio)
-            .divide(MILLON, 2, RoundingMode.HALF_UP);
+        BigDecimal delta = prevalenciaFinal.subtract(prevalenciaBase);
 
         for (int t = 1; t <= horizonteAnios; t++) {
+            BigDecimal fraccion = t >= ANIOS_CONVERGENCIA
+                ? BigDecimal.ONE
+                : new BigDecimal(t).divide(new BigDecimal(ANIOS_CONVERGENCIA), 6, RoundingMode.HALF_UP);
+            BigDecimal prevalenciaT = prevalenciaBase.add(delta.multiply(fraccion))
+                .setScale(4, RoundingMode.HALF_UP);
+
+            BigDecimal fumadoresT = poblacion.multiply(prevalenciaT)
+                .divide(CIEN, 0, RoundingMode.HALF_UP);
+            BigDecimal defEvitadasT = prevalenciaBase.subtract(prevalenciaT)
+                .divide(prevalenciaBase, 6, RoundingMode.HALF_UP)
+                .multiply(defuncionesAtrib)
+                .setScale(0, RoundingMode.HALF_UP);
+            BigDecimal ahorroT = defEvitadasT.multiply(costoPromedio)
+                .divide(MILLON, 2, RoundingMode.HALF_UP);
+
             ProyeccionAnualDto anual = new ProyeccionAnualDto();
             anual.anio = t;
-            anual.prevalenciaPct = prevalenciaFinal.setScale(2, RoundingMode.HALF_UP);
+            anual.prevalenciaPct = prevalenciaT.setScale(2, RoundingMode.HALF_UP);
             anual.fumadoresAbsolutos = fumadoresT.longValue();
             anual.defuncionesEvitadas = defEvitadasT.longValue();
             anual.ahorroMdp = ahorroT;
