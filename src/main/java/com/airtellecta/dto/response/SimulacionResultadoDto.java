@@ -20,4 +20,7 @@ public class SimulacionResultadoDto {
 
     @Schema(description = "Elasticidades de precio utilizadas para modelar el efecto fiscal.")
     public ElasticidadesAplicadasDto elasticidadesAplicadas;
+
+    // v2
+    public String metodoVersion;
 }

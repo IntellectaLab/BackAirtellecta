@@ -14,4 +14,8 @@ public class PoliticaAplicadaDto {
 
     @Schema(description = "Reducción estimada en prevalencia atribuida a esta política (puntos porcentuales).", example = "1.5")
     public BigDecimal efectoPct;
+
+    // v2 fields
+    public BigDecimal efectoInicioPct;
+    public BigDecimal efectoCesacionPct;
 }

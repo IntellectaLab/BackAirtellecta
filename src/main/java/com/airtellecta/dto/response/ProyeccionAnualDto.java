@@ -20,4 +20,8 @@ public class ProyeccionAnualDto {
 
     @Schema(description = "Ahorro acumulado en costos de atención médica (millones de pesos).", example = "12400.5")
     public BigDecimal ahorroMdp;
+
+    // v2 fields — backwards compatible (null if not set)
+    public BigDecimal prevalenciaBaselinePct;
+    public long defuncionesEvitadasAcumuladas;
 }
