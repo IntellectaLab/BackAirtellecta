@@ -9,4 +9,7 @@ public class SimulacionResultadoDto {
     public ResumenFinalDto resumenFinal;
     public List<PoliticaAplicadaDto> politicasAplicadas;
     public ElasticidadesAplicadasDto elasticidadesAplicadas;
+
+    // v2
+    public String metodoVersion;
 }

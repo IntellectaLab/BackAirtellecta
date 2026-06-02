@@ -8,6 +8,7 @@ import com.airtellecta.dto.response.ProyeccionAnualDto;
 import com.airtellecta.dto.response.ResumenFinalDto;
 import com.airtellecta.dto.response.SimulacionResultadoDto;
 import com.airtellecta.repository.SimulacionRepository;
+import com.airtellecta.repository.SimulacionRepository.ElasticidadGrupo;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.math.BigDecimal;
@@ -21,19 +22,13 @@ public class SimulacionService {
 
     private static final BigDecimal CIEN = new BigDecimal("100");
     private static final BigDecimal MILLON = new BigDecimal("1000000");
+    private static final BigDecimal FLOOR_PREVALENCIA = new BigDecimal("0.5");
 
     @Inject
     SimulacionRepository repository;
 
     @Inject
     ConstantesService constantesService;
-
-    private record EfectoPrecio(BigDecimal prevalenciaFinal, ElasticidadesAplicadasDto dto) {}
-
-    private record ResultadoProyeccion(
-        List<ProyeccionAnualDto> serie,
-        BigDecimal defuncionesEvitadasTotal,
-        BigDecimal ahorroTotal) {}
 
     public SimulacionResultadoDto simular(SimulacionRequestDto request) {
         Map<String, BigDecimal> constantes = constantesService.cargarConstantes();
@@ -46,31 +41,214 @@ public class SimulacionService {
 
         validar(request, horizonteAnios);
 
+        // ── Base parameters ──
         BigDecimal prevalenciaBase = constantes.get("SIM_PREVALENCIA_BASE_PCT");
-        BigDecimal poblacion = constantes.get("SIM_POBLACION_18_PLUS");
-        BigDecimal fumadoresBase = poblacion.multiply(prevalenciaBase)
+        BigDecimal poblacionBase = constantes.get("SIM_POBLACION_18_PLUS");
+        BigDecimal fumadoresBase = poblacionBase.multiply(prevalenciaBase)
             .divide(CIEN, 0, RoundingMode.HALF_UP);
         BigDecimal defuncionesAtrib = constantesService.calcularDefuncionesAtribuibles(constantes);
         BigDecimal impuestoActualPct = constantesService.calcularImpuestoActualPct(constantes);
 
+        BigDecimal tendenciaPpAnual = constantes.getOrDefault(
+            "SIM_TENDENCIA_NATURAL_PP_ANUAL", new BigDecimal("-0.34"));
+        BigDecimal tau = constantes.getOrDefault(
+            "SIM_TAU_CONVERGENCIA", new BigDecimal("2.5"));
+        int anioBase = constantes.getOrDefault(
+            "SIM_ANIO_BASE", new BigDecimal("2025")).intValue();
+
+        // ── Mortality rate per smoker ──
+        BigDecimal tasaMortalidadPorFumador = defuncionesAtrib
+            .divide(fumadoresBase, 10, RoundingMode.HALF_UP);
+
+        // ── Policy effects ──
         List<PoliticaAplicadaDto> politicasAplicadas = cargarPoliticas(clavesPoliticas);
-        BigDecimal prevalenciaPostPol = aplicarPoliticas(prevalenciaBase, politicasAplicadas);
 
-        EfectoPrecio efectoPrecio = aplicarElasticidades(
-            prevalenciaPostPol, impuestoActualPct, request.impuestoPctPrecio);
+        // First-year prevalence shift (multiplicative)
+        BigDecimal shiftMultiplicativo = BigDecimal.ONE;
+        for (PoliticaAplicadaDto pol : politicasAplicadas) {
+            BigDecimal factor = BigDecimal.ONE.add(
+                pol.efectoPct.divide(CIEN, 6, RoundingMode.HALF_UP));
+            shiftMultiplicativo = shiftMultiplicativo.multiply(factor)
+                .setScale(6, RoundingMode.HALF_UP);
+        }
 
-        BigDecimal prevalenciaFinal = efectoPrecio.prevalenciaFinal;
+        // Ongoing cessation/initiation effect (sum of all policies, applied gradually)
+        BigDecimal efectoOngoingTotal = BigDecimal.ZERO;
+        for (PoliticaAplicadaDto pol : politicasAplicadas) {
+            BigDecimal cesacion = pol.efectoCesacionPct != null ? pol.efectoCesacionPct : BigDecimal.ZERO;
+            BigDecimal inicio = pol.efectoInicioPct != null ? pol.efectoInicioPct : BigDecimal.ZERO;
+            efectoOngoingTotal = efectoOngoingTotal.add(cesacion.abs()).add(inicio.abs());
+        }
+
+        // ── Tax/price elasticity (age-weighted) ──
+        ElasticidadesAplicadasDto elasticidadesDto = null;
+        BigDecimal efectoPrecioMultiplicador = BigDecimal.ONE;
+        if (request.impuestoPctPrecio != null) {
+            BigDecimal incrementoPrecioPct = request.impuestoPctPrecio
+                .subtract(impuestoActualPct)
+                .divide(impuestoActualPct, 6, RoundingMode.HALF_UP)
+                .multiply(CIEN).setScale(2, RoundingMode.HALF_UP);
+
+            BigDecimal efectoPrecioPct = calcularEfectoPrecioPonderado(incrementoPrecioPct);
+
+            efectoPrecioMultiplicador = BigDecimal.ONE.add(
+                efectoPrecioPct.divide(CIEN, 6, RoundingMode.HALF_UP));
+
+            elasticidadesDto = new ElasticidadesAplicadasDto();
+            elasticidadesDto.impuestoNuevoPctPrecio = request.impuestoPctPrecio;
+            elasticidadesDto.incrementoPrecioPct = incrementoPrecioPct;
+            elasticidadesDto.efectoPromedioPct = efectoPrecioPct;
+        }
+
+        // ── Year-by-year projection ──
+        List<ProyeccionAnualDto> serie = new ArrayList<>();
+        BigDecimal defEvitadasAcum = BigDecimal.ZERO;
+        BigDecimal ahorroAcum = BigDecimal.ZERO;
         BigDecimal costoPromedio = repository.obtenerCostoPromedio();
 
-        ResultadoProyeccion proyeccion = proyectar(
-            prevalenciaBase, prevalenciaFinal, poblacion,
-            defuncionesAtrib, costoPromedio, horizonteAnios);
+        BigDecimal prevBaseline = prevalenciaBase;  // tracks baseline (no intervention)
+        BigDecimal prevIntervencion = prevalenciaBase;  // tracks with-intervention
 
-        return construirResultado(
-            prevalenciaBase, prevalenciaFinal, poblacion, fumadoresBase,
-            defuncionesAtrib, impuestoActualPct, horizonteAnios,
-            proyeccion, politicasAplicadas, efectoPrecio.dto);
+        for (int t = 1; t <= horizonteAnios; t++) {
+            int anioActual = anioBase + t;
+
+            // 1. Natural trend (both lines decline)
+            prevBaseline = prevBaseline.add(tendenciaPpAnual)
+                .max(FLOOR_PREVALENCIA);
+
+            // 2. Intervention prevalence starts from baseline trend
+            prevIntervencion = prevIntervencion.add(tendenciaPpAnual);
+
+            // 3. Year 1: apply first-year policy shift + tax effect
+            if (t == 1) {
+                prevIntervencion = prevIntervencion.multiply(shiftMultiplicativo)
+                    .setScale(4, RoundingMode.HALF_UP);
+                prevIntervencion = prevIntervencion.multiply(efectoPrecioMultiplicador)
+                    .setScale(4, RoundingMode.HALF_UP);
+            }
+
+            // 4. Years 2+: ongoing cessation/initiation effect with exponential adoption
+            if (t >= 2 && efectoOngoingTotal.compareTo(BigDecimal.ZERO) > 0) {
+                // adopcion(t) = 1 - e^(-(t-1)/tau) — starts at t=2, ramps up
+                double adopcion = 1.0 - Math.exp(-(t - 1) / tau.doubleValue());
+                BigDecimal efectoAnual = efectoOngoingTotal
+                    .multiply(new BigDecimal(adopcion))
+                    .divide(CIEN, 6, RoundingMode.HALF_UP);
+                // Apply as additional prevalence reduction (ongoing effect is incremental each year)
+                BigDecimal incrementoVsPrevio = efectoAnual.subtract(
+                    t >= 3
+                        ? efectoOngoingTotal.multiply(new BigDecimal(1.0 - Math.exp(-(t - 2) / tau.doubleValue())))
+                            .divide(CIEN, 6, RoundingMode.HALF_UP)
+                        : BigDecimal.ZERO);
+                prevIntervencion = prevIntervencion.subtract(incrementoVsPrevio)
+                    .max(FLOOR_PREVALENCIA);
+            }
+
+            prevIntervencion = prevIntervencion.max(FLOOR_PREVALENCIA)
+                .setScale(4, RoundingMode.HALF_UP);
+
+            // 5. Dynamic population
+            BigDecimal poblacionT = obtenerPoblacionParaAnio(anioActual, poblacionBase);
+
+            // 6. Compute smokers
+            BigDecimal fumadoresBaseline = poblacionT.multiply(prevBaseline)
+                .divide(CIEN, 0, RoundingMode.HALF_UP);
+            BigDecimal fumadoresIntervencion = poblacionT.multiply(prevIntervencion)
+                .divide(CIEN, 0, RoundingMode.HALF_UP);
+
+            // 7. Deaths avoided (difference baseline vs intervention)
+            BigDecimal muertesBaseline = fumadoresBaseline.multiply(tasaMortalidadPorFumador)
+                .setScale(0, RoundingMode.HALF_UP);
+            BigDecimal muertesIntervencion = fumadoresIntervencion.multiply(tasaMortalidadPorFumador)
+                .setScale(0, RoundingMode.HALF_UP);
+            BigDecimal defEvitadasAnuales = muertesBaseline.subtract(muertesIntervencion)
+                .max(BigDecimal.ZERO);
+            defEvitadasAcum = defEvitadasAcum.add(defEvitadasAnuales);
+
+            BigDecimal ahorroAnual = defEvitadasAnuales.multiply(costoPromedio)
+                .divide(MILLON, 2, RoundingMode.HALF_UP);
+            ahorroAcum = ahorroAcum.add(ahorroAnual);
+
+            // 8. Build row
+            ProyeccionAnualDto anual = new ProyeccionAnualDto();
+            anual.anio = anioActual;
+            anual.prevalenciaPct = prevIntervencion.setScale(2, RoundingMode.HALF_UP);
+            anual.fumadoresAbsolutos = fumadoresIntervencion.longValue();
+            anual.defuncionesEvitadas = defEvitadasAnuales.longValue();
+            anual.ahorroMdp = ahorroAnual;
+            // v2 fields
+            anual.prevalenciaBaselinePct = prevBaseline.setScale(2, RoundingMode.HALF_UP);
+            anual.defuncionesEvitadasAcumuladas = defEvitadasAcum.longValue();
+            serie.add(anual);
+        }
+
+        // ── Build result ──
+        ProyeccionAnualDto ultimoAnio = serie.get(serie.size() - 1);
+
+        ParametrosBaseDto parametrosBase = new ParametrosBaseDto();
+        parametrosBase.prevalenciaBasePct = prevalenciaBase.setScale(2, RoundingMode.HALF_UP);
+        parametrosBase.poblacion18Plus = poblacionBase.longValue();
+        parametrosBase.fumadoresBase = fumadoresBase.longValue();
+        parametrosBase.defuncionesAtribuiblesBase = defuncionesAtrib.longValue();
+        parametrosBase.impuestoActualPctPrecio = impuestoActualPct;
+
+        ResumenFinalDto resumen = new ResumenFinalDto();
+        resumen.prevalenciaFinalPct = ultimoAnio.prevalenciaPct;
+        resumen.reduccionPuntosPct = prevalenciaBase.subtract(ultimoAnio.prevalenciaPct)
+            .setScale(2, RoundingMode.HALF_UP);
+        resumen.fumadoresEvitadosTotal = fumadoresBase.longValue() - ultimoAnio.fumadoresAbsolutos;
+        resumen.defuncionesEvitadasTotal = defEvitadasAcum.longValue();
+        resumen.ahorroAcumuladoMdp = ahorroAcum;
+
+        SimulacionResultadoDto resultado = new SimulacionResultadoDto();
+        resultado.parametrosBase = parametrosBase;
+        resultado.proyeccion = serie;
+        resultado.resumenFinal = resumen;
+        resultado.politicasAplicadas = politicasAplicadas;
+        resultado.elasticidadesAplicadas = elasticidadesDto;
+        resultado.metodoVersion = "v2-enhanced";
+
+        return resultado;
     }
+
+    // ── Age-weighted price elasticity ──
+
+    private static final Map<String, BigDecimal> PESOS_GRUPO_EDAD = Map.of(
+        "15-17", new BigDecimal("0.05"),
+        "18-24", new BigDecimal("0.20"),
+        "25-34", new BigDecimal("0.25"),
+        "35-44", new BigDecimal("0.25"),
+        "45+",   new BigDecimal("0.25")
+    );
+
+    private BigDecimal calcularEfectoPrecioPonderado(BigDecimal incrementoPrecioPct) {
+        List<ElasticidadGrupo> elasticidades = repository.obtenerElasticidadesConGrupo();
+
+        BigDecimal sumaPonderada = BigDecimal.ZERO;
+        BigDecimal sumaPesos = BigDecimal.ZERO;
+
+        for (ElasticidadGrupo eg : elasticidades) {
+            BigDecimal peso = PESOS_GRUPO_EDAD.getOrDefault(eg.grupoEdad(), new BigDecimal("0.20"));
+            sumaPonderada = sumaPonderada.add(eg.elasticidad().multiply(peso));
+            sumaPesos = sumaPesos.add(peso);
+        }
+
+        BigDecimal elasticidadPonderada = sumaPesos.compareTo(BigDecimal.ZERO) > 0
+            ? sumaPonderada.divide(sumaPesos, 6, RoundingMode.HALF_UP)
+            : new BigDecimal("-0.24");
+
+        return elasticidadPonderada.multiply(incrementoPrecioPct)
+            .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    // ── Dynamic population lookup ──
+
+    private BigDecimal obtenerPoblacionParaAnio(int anio, BigDecimal fallback) {
+        BigDecimal poblacion = repository.obtenerPoblacionNacional18Plus(anio);
+        return poblacion != null ? poblacion : fallback;
+    }
+
+    // ── Load and validate policies ──
 
     private List<PoliticaAplicadaDto> cargarPoliticas(List<String> claves) {
         if (claves.isEmpty()) {
@@ -87,127 +265,6 @@ public class SimulacionService {
                 "Politica no encontrada: " + faltante);
         }
         return encontradas;
-    }
-
-    private BigDecimal aplicarPoliticas(BigDecimal prevalenciaBase,
-            List<PoliticaAplicadaDto> politicas) {
-        BigDecimal resultado = prevalenciaBase;
-        for (PoliticaAplicadaDto pol : politicas) {
-            BigDecimal factor = BigDecimal.ONE.add(
-                pol.efectoPct.divide(CIEN, 6, RoundingMode.HALF_UP));
-            resultado = resultado.multiply(factor).setScale(4, RoundingMode.HALF_UP);
-        }
-        return resultado;
-    }
-
-    private EfectoPrecio aplicarElasticidades(BigDecimal prevalenciaPostPol,
-            BigDecimal impuestoActualPct, BigDecimal impuestoPctPrecio) {
-        if (impuestoPctPrecio == null) {
-            return new EfectoPrecio(prevalenciaPostPol, null);
-        }
-
-        List<BigDecimal> elasticidades = repository.obtenerElasticidades();
-
-        BigDecimal incrementoPrecioPct = impuestoPctPrecio
-            .subtract(impuestoActualPct)
-            .divide(impuestoActualPct, 6, RoundingMode.HALF_UP)
-            .multiply(CIEN).setScale(2, RoundingMode.HALF_UP);
-
-        BigDecimal sumaElast = elasticidades.stream()
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal promedioElast = sumaElast.divide(
-            new BigDecimal(elasticidades.size()), 6, RoundingMode.HALF_UP);
-        BigDecimal efectoPrecio = promedioElast.multiply(incrementoPrecioPct)
-            .setScale(2, RoundingMode.HALF_UP);
-
-        BigDecimal prevalenciaFinal = prevalenciaPostPol.multiply(
-            BigDecimal.ONE.add(efectoPrecio.divide(CIEN, 6, RoundingMode.HALF_UP)))
-            .setScale(4, RoundingMode.HALF_UP);
-
-        ElasticidadesAplicadasDto dto = new ElasticidadesAplicadasDto();
-        dto.impuestoNuevoPctPrecio = impuestoPctPrecio;
-        dto.incrementoPrecioPct = incrementoPrecioPct;
-        dto.efectoPromedioPct = efectoPrecio;
-
-        return new EfectoPrecio(prevalenciaFinal, dto);
-    }
-
-    private static final int ANIOS_CONVERGENCIA = 5;
-
-    private ResultadoProyeccion proyectar(BigDecimal prevalenciaBase,
-            BigDecimal prevalenciaFinal, BigDecimal poblacion,
-            BigDecimal defuncionesAtrib, BigDecimal costoPromedio, int horizonteAnios) {
-        List<ProyeccionAnualDto> serie = new ArrayList<>();
-        BigDecimal defEvitadasAcum = BigDecimal.ZERO;
-        BigDecimal ahorroAcum = BigDecimal.ZERO;
-        BigDecimal delta = prevalenciaFinal.subtract(prevalenciaBase);
-
-        for (int t = 1; t <= horizonteAnios; t++) {
-            BigDecimal fraccion = t >= ANIOS_CONVERGENCIA
-                ? BigDecimal.ONE
-                : new BigDecimal(t).divide(new BigDecimal(ANIOS_CONVERGENCIA), 6, RoundingMode.HALF_UP);
-            BigDecimal prevalenciaT = prevalenciaBase.add(delta.multiply(fraccion))
-                .setScale(4, RoundingMode.HALF_UP);
-
-            BigDecimal fumadoresT = poblacion.multiply(prevalenciaT)
-                .divide(CIEN, 0, RoundingMode.HALF_UP);
-            BigDecimal defEvitadasT = prevalenciaBase.subtract(prevalenciaT)
-                .divide(prevalenciaBase, 6, RoundingMode.HALF_UP)
-                .multiply(defuncionesAtrib)
-                .setScale(0, RoundingMode.HALF_UP);
-            BigDecimal ahorroT = defEvitadasT.multiply(costoPromedio)
-                .divide(MILLON, 2, RoundingMode.HALF_UP);
-
-            ProyeccionAnualDto anual = new ProyeccionAnualDto();
-            anual.anio = t;
-            anual.prevalenciaPct = prevalenciaT.setScale(2, RoundingMode.HALF_UP);
-            anual.fumadoresAbsolutos = fumadoresT.longValue();
-            anual.defuncionesEvitadas = defEvitadasT.longValue();
-            anual.ahorroMdp = ahorroT;
-            serie.add(anual);
-
-            defEvitadasAcum = defEvitadasAcum.add(defEvitadasT);
-            ahorroAcum = ahorroAcum.add(ahorroT);
-        }
-
-        return new ResultadoProyeccion(serie, defEvitadasAcum, ahorroAcum);
-    }
-
-    private SimulacionResultadoDto construirResultado(
-            BigDecimal prevalenciaBase, BigDecimal prevalenciaFinal,
-            BigDecimal poblacion, BigDecimal fumadoresBase,
-            BigDecimal defuncionesAtrib, BigDecimal impuestoActualPct,
-            int horizonteAnios, ResultadoProyeccion proyeccion,
-            List<PoliticaAplicadaDto> politicasAplicadas,
-            ElasticidadesAplicadasDto elasticidadesDto) {
-
-        ParametrosBaseDto parametrosBase = new ParametrosBaseDto();
-        parametrosBase.prevalenciaBasePct = prevalenciaBase.setScale(2, RoundingMode.HALF_UP);
-        parametrosBase.poblacion18Plus = poblacion.longValue();
-        parametrosBase.fumadoresBase = fumadoresBase.longValue();
-        parametrosBase.defuncionesAtribuiblesBase = defuncionesAtrib.longValue();
-        parametrosBase.impuestoActualPctPrecio = impuestoActualPct;
-
-        long fumadoresFinales = poblacion.multiply(prevalenciaFinal)
-            .divide(CIEN, 0, RoundingMode.HALF_UP).longValue();
-
-        ResumenFinalDto resumen = new ResumenFinalDto();
-        resumen.prevalenciaFinalPct = prevalenciaFinal.setScale(2, RoundingMode.HALF_UP);
-        resumen.reduccionPuntosPct = prevalenciaBase.subtract(prevalenciaFinal)
-            .setScale(2, RoundingMode.HALF_UP);
-        resumen.fumadoresEvitadosTotal = (fumadoresBase.longValue() - fumadoresFinales)
-            * horizonteAnios;
-        resumen.defuncionesEvitadasTotal = proyeccion.defuncionesEvitadasTotal.longValue();
-        resumen.ahorroAcumuladoMdp = proyeccion.ahorroTotal;
-
-        SimulacionResultadoDto resultado = new SimulacionResultadoDto();
-        resultado.parametrosBase = parametrosBase;
-        resultado.proyeccion = proyeccion.serie;
-        resultado.resumenFinal = resumen;
-        resultado.politicasAplicadas = politicasAplicadas;
-        resultado.elasticidadesAplicadas = elasticidadesDto;
-
-        return resultado;
     }
 
     private void validar(SimulacionRequestDto request, int horizonteAnios) {

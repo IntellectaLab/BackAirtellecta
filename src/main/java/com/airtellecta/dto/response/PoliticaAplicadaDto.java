@@ -7,4 +7,8 @@ public class PoliticaAplicadaDto {
     public String clave;
     public String nombre;
     public BigDecimal efectoPct;
+
+    // v2 fields
+    public BigDecimal efectoInicioPct;
+    public BigDecimal efectoCesacionPct;
 }

@@ -9,4 +9,8 @@ public class ProyeccionAnualDto {
     public long fumadoresAbsolutos;
     public long defuncionesEvitadas;
     public BigDecimal ahorroMdp;
+
+    // v2 fields — backwards compatible (null if not set)
+    public BigDecimal prevalenciaBaselinePct;
+    public long defuncionesEvitadasAcumuladas;
 }
