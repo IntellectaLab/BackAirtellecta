@@ -49,4 +49,16 @@ public class ExportResource {
                 .header("Content-Disposition", "attachment; filename=\"panel-ejecutivo-airtellecta.xlsx\"")
                 .build();
     }
+
+    @POST
+    @Path("/simulacion/pdf")
+    public Response logSimulacionPdf() {
+        return Response.noContent().build();
+    }
+
+    @POST
+    @Path("/panel-ejecutivo/pdf")
+    public Response logPanelEjecutivoPdf() {
+        return Response.noContent().build();
+    }
 }
