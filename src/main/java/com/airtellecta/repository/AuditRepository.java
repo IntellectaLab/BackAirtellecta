@@ -5,6 +5,8 @@ import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.NoResultException;
 import jakarta.transaction.Transactional;
+import com.airtellecta.dto.response.AuditLogItemDto;
+import java.util.List;
 
 /**
  * Repositorio dedicado para escritura y consulta del audit_log.
@@ -66,5 +68,90 @@ public class AuditRepository {
         } catch (NoResultException e) {
             return null;
         }
+    }
+
+    /**
+     * Retorna una página de registros de audit_log con el email del usuario joined.
+     * Todos los filtros son opcionales (null = sin filtro).
+     */
+    @SuppressWarnings("unchecked")
+    public List<AuditLogItemDto> buscarPaginado(
+            int page, int size,
+            String accion,
+            Integer usuarioId,
+            String fechaInicio,
+            String fechaFin,
+            String emailBusqueda) {
+
+        StringBuilder sql = new StringBuilder("""
+            SELECT
+                a.id,
+                a.usuario_id,
+                u.email          AS usuario_email,
+                a.accion,
+                a.entidad_afectada,
+                a.registro_id,
+                CAST(a.detalle AS CHAR) AS detalle,
+                a.ip_address,
+                DATE_FORMAT(a.created_at, '%Y-%m-%dT%H:%i:%S') AS created_at
+            FROM audit_log a
+            LEFT JOIN usuarios u ON a.usuario_id = u.id
+            WHERE 1=1
+            """);
+
+        if (accion         != null) sql.append(" AND a.accion = :accion");
+        if (usuarioId      != null) sql.append(" AND a.usuario_id = :usuarioId");
+        if (fechaInicio    != null) sql.append(" AND a.created_at >= :fechaInicio");
+        if (fechaFin       != null) sql.append(" AND a.created_at <= :fechaFin");
+        if (emailBusqueda  != null) sql.append(" AND u.email LIKE :email");
+        sql.append(" ORDER BY a.created_at DESC LIMIT :size OFFSET :offset");
+
+        var query = em.createNativeQuery(sql.toString());
+        if (accion         != null) query.setParameter("accion",      accion);
+        if (usuarioId      != null) query.setParameter("usuarioId",   usuarioId);
+        if (fechaInicio    != null) query.setParameter("fechaInicio", fechaInicio);
+        if (fechaFin       != null) query.setParameter("fechaFin",    fechaFin);
+        if (emailBusqueda  != null) query.setParameter("email",       "%" + emailBusqueda + "%");
+        query.setParameter("size",   size);
+        query.setParameter("offset", page * size);
+
+        List<Object[]> rows = query.getResultList();
+        List<AuditLogItemDto> result = new java.util.ArrayList<>();
+        for (Object[] r : rows) {
+            AuditLogItemDto dto = new AuditLogItemDto();
+            dto.id              = r[0] != null ? ((Number) r[0]).longValue()    : null;
+            dto.usuarioId       = r[1] != null ? ((Number) r[1]).intValue()     : null;
+            dto.usuarioEmail    = (String) r[2];
+            dto.accion          = (String) r[3];
+            dto.entidadAfectada = (String) r[4];
+            dto.registroId      = (String) r[5];
+            dto.detalle         = (String) r[6];
+            dto.ipAddress       = (String) r[7];
+            dto.createdAt       = (String) r[8];
+            result.add(dto);
+        }
+        return result;
+    }
+
+    /**
+     * Cuenta el total de registros con los mismos filtros (para calcular totalPages).
+     */
+    public long contar(String accion, Integer usuarioId, String fechaInicio, String fechaFin, String emailBusqueda) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT COUNT(*) FROM audit_log a LEFT JOIN usuarios u ON a.usuario_id = u.id WHERE 1=1");
+        if (accion        != null) sql.append(" AND a.accion = :accion");
+        if (usuarioId     != null) sql.append(" AND a.usuario_id = :usuarioId");
+        if (fechaInicio   != null) sql.append(" AND a.created_at >= :fechaInicio");
+        if (fechaFin      != null) sql.append(" AND a.created_at <= :fechaFin");
+        if (emailBusqueda != null) sql.append(" AND u.email LIKE :email");
+
+        var query = em.createNativeQuery(sql.toString());
+        if (accion        != null) query.setParameter("accion",      accion);
+        if (usuarioId     != null) query.setParameter("usuarioId",   usuarioId);
+        if (fechaInicio   != null) query.setParameter("fechaInicio", fechaInicio);
+        if (fechaFin      != null) query.setParameter("fechaFin",    fechaFin);
+        if (emailBusqueda != null) query.setParameter("email",       "%" + emailBusqueda + "%");
+
+        return ((Number) query.getSingleResult()).longValue();
     }
 }
