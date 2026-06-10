@@ -360,8 +360,15 @@ public class ExcelExportService {
     }
 
     private void autoSizeColumns(XSSFSheet sheet, int numCols) {
+        // autoSizeColumn requires AWT font metrics, which are unavailable in
+        // headless containers (Cloud Run / UBI9 minimal image). Fixed widths instead.
         for (int i = 0; i < numCols; i++) {
-            sheet.autoSizeColumn(i);
+            int width = switch (i) {
+                case 0 -> 5_000;   // códigos / parámetro (~19 chars)
+                case 1 -> 10_000;  // descripción / trastorno (~39 chars)
+                default -> 7_000;  // valor / fuente (~27 chars)
+            };
+            sheet.setColumnWidth(i, width);
         }
     }
 }
