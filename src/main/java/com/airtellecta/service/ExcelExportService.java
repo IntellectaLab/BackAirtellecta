@@ -278,13 +278,18 @@ public class ExcelExportService {
         setCellHeader(r2, 2, "Costo 2025 (MDP)", headerStyle);
         setCellHeader(r2, 3, "Fuente", headerStyle);
 
+        XSSFCellStyle currencyStyle = wb.createCellStyle();
+        currencyStyle.setDataFormat(wb.createDataFormat().getFormat("$#,##0.00"));
+
         int rowIdx = 3;
         if (panel.costosPorPatologia != null) {
             for (CostoPatologiaDto cp : panel.costosPorPatologia) {
                 XSSFRow row = sheet.createRow(rowIdx++);
                 row.createCell(0).setCellValue(cp.codigo != null ? cp.codigo : "");
                 row.createCell(1).setCellValue(cp.trastorno != null ? cp.trastorno : "");
-                row.createCell(2).setCellValue(cp.costoAjustado2025 != null ? cp.costoAjustado2025.doubleValue() : 0);
+                XSSFCell costoCell = row.createCell(2);
+                costoCell.setCellValue(cp.costoAjustado2025 != null ? cp.costoAjustado2025.doubleValue() : 0);
+                costoCell.setCellStyle(currencyStyle);
                 row.createCell(3).setCellValue(cp.fuente != null ? cp.fuente : "");
             }
         }
