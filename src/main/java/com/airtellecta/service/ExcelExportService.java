@@ -24,6 +24,9 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -221,28 +224,25 @@ public class ExcelExportService {
         setCellHeader(r3, 1, "Valor", headerStyle);
         setCellHeader(r3, 2, "Fuente", headerStyle);
 
+        XSSFCellStyle currencyStyle = wb.createCellStyle();
+        currencyStyle.setDataFormat(wb.createDataFormat().getFormat("$#,##0.00"));
+
         int rowIdx = 4;
 
         if (panel.cargaEconomica != null) {
-            rowIdx = addDataRow(sheet, rowIdx, "Costo directo anual (MDP)",
-                    panel.cargaEconomica.costoDirectoAnualMdp != null
-                            ? panel.cargaEconomica.costoDirectoAnualMdp.toPlainString() : "",
-                    "Carga Económica");
-            rowIdx = addDataRow(sheet, rowIdx, "Costo social anual (MDP)",
-                    panel.cargaEconomica.costoSocialAnualMdp != null
-                            ? panel.cargaEconomica.costoSocialAnualMdp.toPlainString() : "",
-                    "Carga Económica");
-            rowIdx = addDataRow(sheet, rowIdx, "Inversión prevención (MDP)",
-                    panel.cargaEconomica.inversionPrevencionMdp != null
-                            ? panel.cargaEconomica.inversionPrevencionMdp.toPlainString() : "",
-                    "Carga Económica");
+            rowIdx = addCurrencyRow(sheet, rowIdx, "Costo directo anual (MDP)",
+                    panel.cargaEconomica.costoDirectoAnualMdp, "Carga Económica", currencyStyle);
+            rowIdx = addCurrencyRow(sheet, rowIdx, "Costo social anual (MDP)",
+                    panel.cargaEconomica.costoSocialAnualMdp, "Carga Económica", currencyStyle);
+            rowIdx = addCurrencyRow(sheet, rowIdx, "Inversión prevención (MDP)",
+                    panel.cargaEconomica.inversionPrevencionMdp, "Carga Económica", currencyStyle);
         }
 
         if (panel.recaudacion != null) {
-            rowIdx = addDataRow(sheet, rowIdx, "Recaudación IEPS (MDP)",
-                    panel.recaudacion.iepsMasRecienteMdp != null
-                            ? panel.recaudacion.iepsMasRecienteMdp.toPlainString() : "",
-                    panel.recaudacion.fuente != null ? panel.recaudacion.fuente : "SHCP/IEPS");
+            rowIdx = addCurrencyRow(sheet, rowIdx, "Recaudación IEPS (MDP)",
+                    panel.recaudacion.iepsMasRecienteMdp,
+                    panel.recaudacion.fuente != null ? panel.recaudacion.fuente : "SHCP/IEPS",
+                    currencyStyle);
         }
 
         if (panel.epidemiologia != null) {
@@ -286,7 +286,7 @@ public class ExcelExportService {
             for (CostoPatologiaDto cp : panel.costosPorPatologia) {
                 XSSFRow row = sheet.createRow(rowIdx++);
                 row.createCell(0).setCellValue(cp.codigo != null ? cp.codigo : "");
-                row.createCell(1).setCellValue(cp.trastorno != null ? cp.trastorno : "");
+                row.createCell(1).setCellValue(cp.trastorno != null ? fixMojibake(cp.trastorno) : "");
                 XSSFCell costoCell = row.createCell(2);
                 costoCell.setCellValue(cp.costoAjustado2025 != null ? cp.costoAjustado2025.doubleValue() : 0);
                 costoCell.setCellStyle(currencyStyle);
@@ -362,6 +362,26 @@ public class ExcelExportService {
         row.createCell(0).setCellValue(dato);
         row.createCell(1).setCellValue(fuente);
         return rowIdx + 1;
+    }
+
+    private int addCurrencyRow(XSSFSheet sheet, int rowIdx, String param,
+                               BigDecimal value, String fuente, XSSFCellStyle style) {
+        XSSFRow row = sheet.createRow(rowIdx);
+        row.createCell(0).setCellValue(param);
+        XSSFCell cell = row.createCell(1);
+        cell.setCellValue(value != null ? value.doubleValue() : 0);
+        cell.setCellStyle(style);
+        row.createCell(2).setCellValue(fuente);
+        return rowIdx + 1;
+    }
+
+    private String fixMojibake(String s) {
+        if (s == null) return null;
+        try {
+            return new String(s.getBytes(Charset.forName("Cp850")), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return s;
+        }
     }
 
     private void autoSizeColumns(XSSFSheet sheet, int numCols) {
