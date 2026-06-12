@@ -127,7 +127,7 @@ public class UsuarioService {
         String nuevaInst      = req.institucion    != null ? req.institucion    : existing.institucion;
         String nuevoRol       = req.rol            != null ? req.rol            : existing.rol;
         Byte   nuevoEntidadId = req.entidadId      != null ? req.entidadId      : existing.entidadId;
-        Boolean nuevoActivo   = req.activo         != null ? req.activo         : existing.activo;
+        boolean nuevoActivo   = req.activo         != null ? req.activo         : existing.activo;
 
         // 3. Sync Firebase if role or activo changed
         if (req.rol != null && !req.rol.equals(existing.rol)) {
